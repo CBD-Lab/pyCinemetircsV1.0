@@ -1,0 +1,9 @@
+{
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.autopep8"
+  },
+  "python.formatting.provider": "none",
+  "latex-workshop.bibtex-format.tab": "2 spaces",
+  "editor.tabSize": 4
+}
