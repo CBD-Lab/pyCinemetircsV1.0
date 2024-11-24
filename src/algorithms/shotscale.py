@@ -1,18 +1,29 @@
 import csv
-
+import os
 import cv2
 import time
 import math
 import numpy as np
 from matplotlib import pyplot as plt
 from collections import Counter
-
 from src.algorithms.shotscaleconfig import *
+from src.ui.progressbar import *
 
-class shotscale(object):
+class ShotScale(QThread):
+    #  通过类成员对象定义信号对象
+    signal = Signal(int, int, int)
+    #线程中断
+    is_stop = 0
+    #二选一信号
+    signal2 = Signal(bool)
+    # 线程结束信号
+    finished = Signal(bool)
 
     # 初始化 Pose keypoint_num: 25 or 18
-    def __init__(self, keypoint_num):
+    def __init__(self, keypoint_num, image_save, frame_save):
+        super(ShotScale, self).__init__()
+        self.image_save=image_save
+        self.frame_save=frame_save
         self.point_names = point_name_25 if keypoint_num == 25 else point_names_18
         self.point_pairs = point_pairs_25 if keypoint_num == 25 else point_pairs_18
         self.map_idx = map_idx_25 if keypoint_num == 25 else map_idx_18
@@ -22,6 +33,43 @@ class shotscale(object):
         self.prototxt = prototxt_25 if keypoint_num == 25 else prototxt_18
         self.caffemodel = caffemodel_25 if keypoint_num == 25 else caffemodel_18
         self.pose_net = self.get_model()
+
+    def run(self):
+        image_files = [f for f in os.listdir(self.frame_save) if f.endswith((".jpg", ".jpeg", ".png"))]
+        print(self.frame_save)
+        result = []
+        # 进度条设置 shotscale
+        task_id = 1
+
+        for img in image_files:
+            if self.is_stop:
+                self.finished.emit(True)
+                break
+            print(img)
+            imgDetect, type, num = self.predict(self.frame_save + img)
+
+            percent = round(float(task_id / len(image_files)) * 100)
+            self.signal.emit(percent, task_id, len(image_files))  # 刷新进度条
+            task_id += 1
+            # cv2.imshow("frame", imgDetect)
+            # cv2.waitKey(0)
+            # cv2.destroyAllWindows()
+            print("Detected People:", num)
+            frame_id = img.replace("frame", "").replace(".jpg", "").replace(".jpeg", "").replace(".png", "")
+            result.append([frame_id, type, num])
+        self.signal.emit(101, 101, 101)  # 完事了再发一次
+        
+        if self.is_stop:
+            self.finished.emit(True)
+            pass
+        else:
+            self.shotscale_csv(result, self.image_save)
+            png_file = os.path.join(self.image_save, "shotscale.png")
+            if os.path.exists(png_file):
+                pass
+            else:
+                self.shotscale_plot(result, self.image_save)
+            self.finished.emit(True)
 
     # 通过读取配置文件和权重文件，加载预训练的OpenPose模型
     def get_model(self):
@@ -63,7 +111,6 @@ class shotscale(object):
                 points_table.append(keypoints[i] + (keypoint_id,) + (self.point_names[part],))
                 # 给每个关键点赋予一个唯一的ID
                 keypoint_with_id.append(keypoints[i] + (keypoint_id,))
-                # print("keypoint_with_id", keypoint_with_id)
                 # 存储所有检测到的关键点的位置信息，每个关键点一行
                 keypoints_list = np.vstack([keypoints_list, keypoints[i]])  # 用于生成完整的人体姿态关键点信息
                 # print("keypoints_list", keypoints_list)
@@ -71,16 +118,12 @@ class shotscale(object):
 
             detected_keypoints.append(keypoint_with_id)  # 用于确定有效的关键点对
 
-        # print("detected_keypoints", detected_keypoints)
         valid_paris, invalid_pairs = self.getValidPairs(output, detected_keypoints, width, height)
-        # print("valid_paris", valid_paris)
-        # print("invalid_pairs", invalid_pairs)
         # 使用有效关键点对，计算出完整的人体姿态关键点信息
         # personwiseKeypoints是一个二维数组，其中每一行表示一个人体姿态，每列对应一个关键点或得分
         # 每个行（每个姿态）中的前self.num_points列对应一个关键点的索引（如：鼻子、左肩、右肩等），值表示相应关键点的检测到的关键点的ID
         # 每行中的最后一列表示该姿态的累积得分，由连接的关键点的概率和连接得分的累积组成，这个得分可以用来度量人体姿态的置信度
         personwiseKeypoints = self.getPersonwiseKeypoints(valid_paris, invalid_pairs, keypoints_list)
-        # print("personwiseKeypoints", personwiseKeypoints)
         img = self.vis_pose(imgfile, personwiseKeypoints, keypoints_list)
         FPS = math.ceil(1 / (time.time() - start))
 
@@ -124,8 +167,6 @@ class shotscale(object):
 
             candA = detected_keypoints[self.point_pairs[k][0]]
             candB = detected_keypoints[self.point_pairs[k][1]]
-            # print("candA", candA)
-            # print("candB", candB)
             nA = len(candA)
             nB = len(candB)
             if (nA != 0 and nB != 0):
@@ -185,11 +226,8 @@ class shotscale(object):
                 # 从有效连接列表中获取关键点连接的部位A和部位B的索引
                 partAs = valid_pairs[k][:, 0]
                 partBs = valid_pairs[k][:, 1]
-                # print("partAs", partAs)
-                # print("partBs", partBs)
                 indexA, indexB = np.array(self.point_pairs[k])
-                # print("indexA", indexA)
-                # print("indexB", indexB)
+
                 for i in range(len(valid_pairs[k])):
                     found = 0
                     person_idx = -1
@@ -221,10 +259,7 @@ class shotscale(object):
                     continue
                 B = np.int32(keypoints_list[index.astype(int), 0])
                 A = np.int32(keypoints_list[index.astype(int), 1])
-                # print("B", B)
-                # print("A", A)
                 cv2.line(img, (B[0], A[0]), (B[1], A[1]), self.colors[i], 3, cv2.LINE_AA)
-        # img = cv2.resize(img, (480, 640))
         return img
 
     # 获取面积占比最大的关键人物
@@ -239,8 +274,6 @@ class shotscale(object):
             x_coordinates = []
             y_coordinates = []
             part = []
-            # print("i", i)
-            # print("person_keypoints", person_keypoints)
             for j in range(self.num_points):
                 value = np.int32(person_keypoints[j])
                 if value != -1:
@@ -249,9 +282,6 @@ class shotscale(object):
                             x_coordinates.append(points[0])
                             y_coordinates.append(points[1])
                             part.append(points[4])
-            # print("x_coordinates", x_coordinates)
-            # print("y_coordinates", y_coordinates)
-            # print("part", part)
 
             min_x = np.min(x_coordinates)
             max_x = np.max(x_coordinates)
@@ -297,7 +327,7 @@ class shotscale(object):
 
     def shotscale_csv(self, detectInfo, savePath):
         # path为输出路径和文件名，newline=''是为了不出现空行
-        shotscale_csv = open(savePath + "/shotscale.csv", "w+", newline='')
+        shotscale_csv = open(os.path.join(savePath, "shotscale.csv"), "w+", newline = '')
         # name为列名
         name = ['FrameId', 'ShotScale', 'Detect_Person_Num']
         try:
@@ -328,5 +358,7 @@ class shotscale(object):
         fig.gca().add_artist(centre_circle)
         plt.title('Shot Scale')
         plt.axis('equal')
-        plt.savefig(image_save + '/shotscale.png')
-        # plt.show()
+        plt.savefig(os.path.join(image_save, 'shotscale.png'))
+
+    def stop(self):
+        self.is_stop = 1

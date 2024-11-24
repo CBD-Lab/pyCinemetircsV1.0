@@ -1,22 +1,38 @@
 import os
-import re
-
+import easyocr
 import cv2
 import csv
 from src.algorithms.wordcloud2frame import WordCloud2Frame
-from src.algorithms.easyocr_readtext import readtext
-class SubtitleProcessor:
-    def __init__(self):
-        return
-    def getsubtitleEasyOcr(self,v_path,save_path,subtitleValue):
-        path=v_path
+from src.ui.progressbar import pyqtbar
+from src.ui.progressbar import *
+
+class SubtitleProcessor(QThread):
+    #  通过类成员对象定义信号对象
+    signal = Signal(int, int, int)
+    #线程中断
+    is_stop = 0
+    #往主线程传递字幕
+    subtitlesignal = Signal(str)
+    # 线程结束信号
+    finished = Signal(bool)
+
+    def __init__(self, v_path, save_path, subtitleValue, parent):
+        super(SubtitleProcessor, self).__init__()
+        self.reader = easyocr.Reader(['ch_sim', 'en'])
+        self.v_path = v_path
+        self.save_path = save_path
+        self.subtitleValue = subtitleValue
+        self.parent = parent
+
+    def run(self):
+        path=self.v_path
         cap = cv2.VideoCapture(path)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         subtitleList = []
         subtitleStr = ""
         i = 0
         _, frame = cap.read(i)
-        h,w=frame.shape[0:2]#图片尺寸，截取下三分之一和中间五分之四作为字幕检测区域
+        h,w=frame.shape[0:2]    #图片尺寸，截取下三分之一和中间五分之四作为字幕检测区域
         start_h = (h // 3)*2
         end_h = h
         start_w = w // 20
@@ -24,66 +40,73 @@ class SubtitleProcessor:
         img1=frame[start_h:end_h,start_w:end_w,:]
         i=i+1
         th=0.2
+
+        # 进度条设置
+        total_number = frame_count  # 总任务数
+
         while i<frame_count:
+            if self.is_stop:
+                self.finished.emit(True)
+                break
+
             if img1 is None:
                 break
             cap.set(cv2.CAP_PROP_POS_FRAMES, i)
             _, frame = cap.read(i)
-            h, w = frame.shape[0:2]  # 图片尺寸，截取下五分之一和中间五分之四作为字幕检测区域
-            start_h = (h // 5)*4
+            h, w = frame.shape[0:2]  # 图片尺寸，截取下三分之一和中间五分之四作为字幕检测区域
+            start_h = (h // 3)*2
             end_h = h
             start_w = w // 10
             end_w = (w // 10) * 9
             img2 = frame[start_h:end_h, start_w:end_w]
             subtitle_event= self.subtitleDetect(img1, img2, th)
-            if subtitle_event or i==1:
-                wordslist = readtext(img2)
+            if subtitle_event:
+                wordslist = self.reader.readtext(img2)
                 for w in wordslist:
-                    # print('w',w,w[1])
                     if w[1] is not None:
-                        w = list(w)
-                        pattern = r"[\s.,;:]+$"
-                        w[1] = re.sub(pattern, '', w[1])
-                        if (not subtitleList or w[1] != subtitleList[-1][1]) and (not self.contains_english(w[1])):
-                            subtitleList.append([i,w[1]])
-                            subtitleStr = subtitleStr + w[1] +'\n'
-                # print('wordslist',wordslist)
-                # if wordslist != []:
-                #     for str in subtitleList:
-                #         if str[0] == i:
-                #             subtitleStr=subtitleStr + str[1]
-                #     subtitleStr = subtitleStr + '\n'
-                #     print(subtitleStr)
+                        if not subtitleList or w[1] + '\n' != subtitleList[-1][1]:
+                            subtitleList.append([i, w[1]])
+                            subtitleStr = subtitleStr + w[1] + '\n'
             else:
                 img1=img2
-            i = i + subtitleValue
-            #12-120，默认48帧
-        cap.release()
-        wc2f=WordCloud2Frame()
-        tf = wc2f.wordfrequencyStr(subtitleStr)
-        wc2f.plotwordcloud(tf,save_path,"subtitle")
+            i = i + self.subtitleValue
+            percent = round(float(i / frame_count) * 100)
+            self.signal.emit(percent, i, frame_count)   # 刷新进度条 不严谨
+        self.signal.emit(101, 101, 101)  # 完事了再发一次
 
-        return subtitleStr,subtitleList
+        if self.is_stop:
+            self.finished.emit(True)
+        else:
+            print("显示字幕结果", subtitleStr)
+            self.subtitle2Srt(subtitleList, self.save_path)
+            self.subtitlesignal.emit(subtitleStr)
+            cap.release()
+            wc2f = WordCloud2Frame()
+            tf = wc2f.wordfrequency(os.path.join(self.save_path, "subtitle.csv"))
+            wc2f.plotwordcloud(tf, self.save_path, "/subtitle")
+            self.finished.emit(True)
 
     def subtitle2Srt(self,subtitleList, savePath):
+
         # path为输出路径和文件名，newline=''是为了不出现空行
-        csvpath=savePath+"subtitle.csv"
-        csvFile = open(csvpath, "w+", newline='')
-        srtFile=savePath+"subtitle.srt"
+        csv_path = os.path.join(savePath, "subtitle.csv")
+        csv_File = open(csv_path, "w+", newline = '')
+        srt_File = os.path.join(savePath, "subtitle.srt")
         # name为列名
         name = ['FrameId','Subtitles']
+
         try:
-            writer = csv.writer(csvFile)
+            writer = csv.writer(csv_File)
             writer.writerow(name)
             for i in range(len(subtitleList)):
                 datarow=[subtitleList[i][0]]
                 datarow.append(subtitleList[i][1])
                 writer.writerow(datarow)
         finally:
-            csvFile.close()
-        with open(srtFile, 'w', encoding='utf-8') as f:
+            csv_File.close()
+        with open(srt_File, 'w', encoding='utf-8') as f:
             for i in range(len(subtitleList)):
-                f.write(str(subtitleList[i][1])+'\n')
+                f.write(str(subtitleList[i][1]) + '\n')
 
     def cmpHash(self,hash1, hash2):
         n = 0
@@ -113,7 +136,7 @@ class SubtitleProcessor:
                 s = s + gray[i, j]
         # 求平均灰度
         avg = s / 64
-        # 遍历图像的每个像素，并比较每个像素的灰度值是否大于平均灰度值 avg。如果大于 avg，则将 '1' 添加到 hash_str 中，否则添加 '0'。这样就生成了一个二进制的哈希字符串
+        # 灰度大于平均值为1相反为0生成图片的hash值
         for i in range(4):
             for j in range(16):
                 if gray[i, j] > avg:
@@ -132,8 +155,5 @@ class SubtitleProcessor:
             subtitle_event=False
         return subtitle_event
 
-    def contains_english(self,text):
-        # 使用正则表达式匹配英文字符
-        english_pattern = re.compile(r'[a-zA-Z]')
-        return bool(english_pattern.search(text))
-
+    def stop(self):
+        self.is_stop = 1

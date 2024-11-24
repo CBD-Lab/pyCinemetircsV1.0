@@ -1,92 +1,102 @@
 import os
 import numpy as np
-
-from PIL import Image
 import csv
-import onnxruntime
+import torch
+import torch.nn
+import torchvision.models as models
+import torch.cuda
+from torchvision import transforms
 from .wordcloud2frame import WordCloud2Frame
+from src.ui.progressbar import *
+from collections import Counter
+from PIL import Image
 
+class ObjectDetection(QThread):
+    signal = Signal(int, int, int)  # 进度更新信号
+    finished = Signal(bool)        # 任务完成信号
+    is_stop = 0                    # 是否中断标志
 
-class CustomTransforms:
-    def __init__(self, mean, std, resize_size=256, crop_size=224):
-        self.mean = np.array(mean, dtype=np.float32)
-        self.std = np.array(std, dtype=np.float32)
-        self.resize_size = resize_size
-        self.crop_size = crop_size
-
-    def __call__(self, img):
-        # Resize
-        img = img.resize((self.resize_size, self.resize_size), Image.BILINEAR)
-
-        # CenterCrop
-        width, height = img.size
-        left = (width - self.crop_size) / 2
-        top = (height - self.crop_size) / 2
-        right = (width + self.crop_size) / 2
-        bottom = (height + self.crop_size) / 2
-        img = img.crop((left, top, right, bottom))
-
-        # ToTensor
-        img = np.array(img, dtype=np.float32).transpose((2, 0, 1)) / 255.0
-
-        # Normalize
-        img = (img - self.mean[:, None, None]) / self.std[:, None, None]
-
-        return img
-
-class ObjectDetection:
     def __init__(self, image_path):
+        super(ObjectDetection, self).__init__()
+        self.is_stop = 0
         self.image_path = image_path
-        self.transform = CustomTransforms(
-                            mean=[0.485, 0.456, 0.406],
-                            std=[0.229, 0.224, 0.225]
-                        )
+        self.transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225]
+            )])
 
     def make_model(self):
-        model_dir = os.path.join(os.path.dirname(__file__), "../../models/resnet50/resnet50.onnx")
-        model = onnxruntime.InferenceSession(model_dir)
-        # if torch.cuda.is_available():
-        #     model.cuda()
+        model = models.resnet50(pretrained=True)
+        model = model.eval()
+        if torch.cuda.is_available():
+            model.cuda()
         return model
 
-    def object_detection(self):
+    def run(self):
         model = self.make_model()
         if self.image_path is None or self.image_path == '':
             return
 
-        file_list = os.listdir(self.image_path+"/frame/")
+        frame_dir = os.path.join(self.image_path, "frame")
+        file_list = os.listdir(frame_dir)
         framelist = []
 
-        with open('./src/algorithms/imagenet_classes.txt') as f:
+        #  1000 个 ImageNet 类别名称
+        with open('./src/files/imagenet_classes.txt') as f:
             classes = [line.strip() for line in f.readlines()]
 
+        # 进度条设置
+        total_number = len(file_list)  # 总任务数
+        task_id = 0  # 子任务序号
+
         for file_name in file_list:
+            if self.is_stop:
+                self.finished.emit(True)
+                break
             if os.path.splitext(file_name)[-1] in ['.jpg', '.png', '.bmp']:
-                img_path = self.image_path+"/frame/"+file_name
-                img_t = self.transform(Image.open(img_path))
+                img_path = os.path.join(frame_dir, file_name)
+                img_t = self.transform(Image.open(img_path).convert('RGB'))
 
-                # if torch.cuda.is_available():
-                #     batch_t = torch.unsqueeze(img_t, 0).cuda()
-                # else:
-                #     batch_t = torch.unsqueeze(img_t, 0)
-                batch_t = np.expand_dims(img_t, axis=0)
-                out = model.run(["output"], {"input": batch_t})[0]
-                indices = np.argsort(out[0])[::-1]  # 按概率降序排列
-                percentage = np.exp(out) / np.sum(np.exp(out), axis=1) * 100
+                if torch.cuda.is_available():
+                    batch_t = torch.unsqueeze(img_t, 0).cuda()
+                else:
+                    batch_t = torch.unsqueeze(img_t, 0)
 
-                for idx in indices[:10]:
+                out = model(batch_t)
+                _, indices = torch.sort(out, descending=True)
+                percentage = torch.nn.functional.softmax(out, dim=1)[0] * 100
+
+                # 每帧选取，10个物体
+                for idx in indices[0][:10]:
                     frame_id = file_name[5:-4]
-                    framelist.append([frame_id, (classes[idx], percentage[0][idx].item())[0]])
+                    framelist.append([frame_id, (classes[idx], percentage[idx].item())[0]])
 
-        self.object_detection_csv(framelist, self.image_path)
+                percent = round(float(task_id / total_number) * 100)
+                self.signal.emit(percent, task_id, total_number)  # 发送实时任务进度和总任务进度
+
+                task_id += 1
+
+        self.signal.emit(101, 101, 101)  # 完成后发送信号
+
+        if self.is_stop:
+            self.finished.emit(True)
+            pass
+        else:
+            self.object_detection_csv(framelist, self.image_path)
 
     def object_detection_csv(self, framelist, save_path):
+        
         csv_file = open(os.path.join(save_path, 'objects.csv'), "w+", newline='')
         name = ['FrameId', 'Top1-Objects']
 
         try:
             writer = csv.writer(csv_file)
             writer.writerow(name)
+            datarow = []
 
             for i in range(len(framelist)):
                 datarow = [framelist[i][0]]
@@ -94,7 +104,10 @@ class ObjectDetection:
                 writer.writerow(datarow)
         finally:
             csv_file.close()
+            wc2f = WordCloud2Frame()
+            tf = wc2f.wordfrequency(os.path.join(save_path, 'objects.csv'))
+            wc2f.plotwordcloud(tf, save_path, '/objects')
+            self.finished.emit(True)
 
-        wc2f = WordCloud2Frame()
-        tf = wc2f.wordfrequency(os.path.join(save_path, 'objects.csv'))
-        wc2f.plotwordcloud(tf, save_path, "/objects")
+    def stop(self):
+        self.is_stop = 1

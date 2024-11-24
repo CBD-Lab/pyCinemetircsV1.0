@@ -1,52 +1,41 @@
 import functools
 import os
-
+import shutil
 from PySide2.QtGui import QPixmap
 from PySide2.QtWidgets import (
     QDockWidget, QPushButton, QLabel, QFileDialog, QSlider, QMessageBox, QVBoxLayout,
-    QWidget, QGridLayout
+    QWidget, QGridLayout, QInputDialog
 )
 from PySide2.QtCore import Qt
 from src.algorithms.objectDetection import ObjectDetection
-from src.algorithms.resultsave import resultsave
-from src.algorithms.shotscale import shotscale
-from src.algorithms.subtitleEasyOcr import *
+from src.algorithms.shotscale import ShotScale
 from src.algorithms.shotcutTransNetV2 import transNetV2_run
 from src.algorithms.subtitleEasyOcr import SubtitleProcessor
 from src.algorithms.img2Colors import ColorAnalysis
+from src.ui.progressbar import pyqtbar
 
 class Control(QDockWidget):
-    def __init__(self, parent,filename):
+    def __init__(self, parent, filename):
         super().__init__('Control', parent)
         self.parent = parent
         self.filename=filename
-        self.AnalyzeImg=""
+        self.AnalyzeImg= None
         self.AnalyzeImgPath=""
         self.parent.filename_changed.connect(self.on_filename_changed)
         # self.video_info_loaded.connect(self.update_table)
-        self.colorsC = 5
-        self.subtitleValue = 48#48
+        self.colorsC = 5 #要分析的颜色类别的数量
+        self.subtitleValue = 48
         self.init_ui()
-        self.messageBox = QMessageBox()
 
     def init_ui(self):
         layout = QVBoxLayout()
         grid_layout = QGridLayout()
 
-        self.shotcut = QPushButton("ShotCut", self)
-        self.shotcut.clicked.connect(self.shotcut_transNetV2)
-
-        self.colors = QPushButton("Colors", self)
-        self.colors.clicked.connect(self.colorAnalyze)
-
-        self.objects = QPushButton("Objects", self)
-        self.objects.clicked.connect(self.object_detect)
-
-        self.subtitleBtn = QPushButton("Subtitles", self)
-        self.subtitleBtn.clicked.connect(self.getsubtitles)
-
-        self.shotscale = QPushButton("ShotScale", self)
-        self.shotscale.clicked.connect(self.getshotscale)
+        self.shotcut = self.create_function_button("ShotCut", self.shotcut_transNetV2)
+        self.colors = self.create_function_button("Colors", self.colorAnalyze)
+        self.objects = self.create_function_button("Objects", self.object_detect)
+        self.subtitleBtn = self.create_function_button("Subtitles", self.getsubtitles)
+        self.shotscale = self.create_function_button("ShotScale", self.getshotscale)
 
         self.colorsSlider = QSlider(Qt.Horizontal, self)  # 水平方向
         self.colorsSlider.setMinimum(3)  # 设置最小值
@@ -58,21 +47,18 @@ class Control(QDockWidget):
         self.colorsSlider.valueChanged.connect(self.colorChange)
 
         self.subtitleSlider = QSlider(Qt.Horizontal, self)  # 水平方向
-        self.subtitleSlider.setMinimum(12)  # 设置最小值
-        self.subtitleSlider.setMaximum(120)  # 设置最大值
+        self.subtitleSlider.setMinimum(1)  # 设置最小值
+        self.subtitleSlider.setMaximum(150)  # 设置最大值
         self.subtitleSlider.setSingleStep(1)  # 设置步长值
         self.subtitleSlider.setValue(48)  # 设置当前值
         self.subtitleSlider.setTickPosition(QSlider.TicksBelow)  # 设置刻度位置，在下方
         self.subtitleSlider.setTickInterval(5)  # 设置刻度间隔
         self.subtitleSlider.valueChanged.connect(self.subtitleChange)
 
-        # self.labelThSlider = QLabel(
-        #     "0.35", self.control)
-        # self.labelThSlider.setGeometry(250, 30, 100, 40)
-
-        self.labelColors = QLabel(
-            "5", self)
+        self.labelColors = QLabel("5", self)
+        self.labelColors.setFixedWidth(30)  # 预留固定宽度，支持最多3位数字
         self.labelSubtitlevalue = QLabel("48", self)
+        self.labelSubtitlevalue.setFixedWidth(30)  # 同样预留固定宽度
 
 
         # shotcut下载按钮
@@ -110,8 +96,8 @@ class Control(QDockWidget):
 
         grid_layout.addWidget(self.colorsSlider, 1, 1)  # 第一行，第二列
         grid_layout.addWidget(self.labelColors, 1, 2)  # 第一行，第三列
-        grid_layout.addWidget(self.subtitleSlider, 3, 1)  # 第二行，第二列
-        grid_layout.addWidget(self.labelSubtitlevalue, 3, 2)  # 第二行，第三列
+        grid_layout.addWidget(self.subtitleSlider, 3, 1)  # 第四行，第二列
+        grid_layout.addWidget(self.labelSubtitlevalue, 3, 2)  # 第四行，第三列
 
         grid_layout.addWidget(self.download_shotcut_button,0,3)
         grid_layout.addWidget(self.download_color_button,1,3)
@@ -123,114 +109,117 @@ class Control(QDockWidget):
         widget = QWidget()
         widget.setLayout(grid_layout)
         self.setWidget(widget)
+
+    def create_function_button(self, label, function):
+        """创建功能按钮并绑定功能函数"""
+        button = QPushButton(label, self)
+        button.clicked.connect(lambda: self.toggle_buttons(False))  # 禁用所有按钮
+        button.clicked.connect(function)
+        return button
+
+    def toggle_buttons(self, enable):
+        """启用或禁用所有按钮"""
+        self.shotcut.setEnabled(enable)
+        self.colors.setEnabled(enable)
+        self.objects.setEnabled(enable)
+        self.subtitleBtn.setEnabled(enable)
+        self.shotscale.setEnabled(enable)
+
     def on_filename_changed(self,filename):
         self.filename=filename
-    def shotcut_transNetV2(self):
-        self.v_path = self.filename  # 视频路径
-        self.frame_save = "./img/" + str(os.path.basename(self.v_path)[0:-4]) + "/frame"  # 图片存储路径
-        self.image_save = "./img/" + str(os.path.basename(self.v_path)[0:-4])
-        self.parent.shot_finished.emit()
 
-        transNetV2_run(self.image_save,self.v_path,self.parent)
-        self.AnalyzeImg = QPixmap(self.image_save + "/shotlen.png")
-        self.AnalyzeImgPath = self.image_save + "/shotlen.png"
-        self.AnalyzeImg = self.AnalyzeImg.scaled(
-            250, 160)
-        self.parent.analyze.labelAnalyze.setPixmap(self.AnalyzeImg)
-        # self.toggle_button.setVisible(False)
+    '''
+    功能模块写成if else 的原因是，在没有视频时或者在没有执行shotcut的情况下点击其他功能时，如果点击按钮，不希望所有按钮变成不能点击的灰色
+    '''
+    def shotcut_transNetV2(self):
+        if self.filename:
+            self.video_path = self.filename  # 视频路径
+            self.frame_save = "./img/" + str(os.path.basename(self.video_path)[0:-4]) + "/frame"  # 图片存储路径
+            self.image_save = "./img/" + str(os.path.basename(self.video_path)[0:-4])
+
+            self.AnalyzeImg = QPixmap(self.image_save + "/shotlen.png")
+            self.AnalyzeImgPath = self.image_save + "/shotlen.png"
+            self.AnalyzeImg = self.AnalyzeImg.scaled(300, 250)
+            self.parent.analyze.labelAnalyze.setPixmap(self.AnalyzeImg)
+            transNetV2_run(self.video_path, self.image_save, self)
+        else:
+            self.toggle_buttons(True)
+            return
 
     def colorAnalyze(self):
-        imgpath = os.path.basename(self.filename)[0:-4]
-        coloranalysis=ColorAnalysis("")
-        if imgpath:
-            if not os.path.exists("img/" + imgpath + '/frame'):  # 判断所在目录下是否有该文件名的文件夹
-                os.makedirs("img/" + imgpath + '/frame') #目录为空给警告
-            if len(os.listdir("img/" + imgpath + '/frame')) == 0:
-                self.messageBox.warning(self.parent, 'warning', 'Storyboarding first')
-        coloranalysis.imgColors(imgpath, self.colorsC)
-        self.AnalyzeImg = QPixmap("img/" + imgpath + "/colors.png")
-        self.AnalyzeImgPath = "img/" + imgpath + "/colors.png"
-        self.AnalyzeImg = self.AnalyzeImg.scaled(
-            250, 160)
-        self.parent.analyze.labelAnalyze.setPixmap(self.AnalyzeImg)
+        if os.path.exists("./img/"+os.path.basename(self.filename)[0:-4]+"/frame"):
+            imgpath = os.path.basename(self.filename)[0:-4]
+            coloranalysis = ColorAnalysis("", imgpath, self.colorsC)
+        else:
+            self.toggle_buttons(True)
+            return
 
-        # self.toggle_button.setVisible(False)  # 初始时不显示按钮
+        coloranalysis.finished.connect(lambda: self.toggle_buttons(True))
+        self.AnalyzeImg = QPixmap("img/" + imgpath + "/" + "colors.png")
+        self.AnalyzeImgPath = "img/" + imgpath + "/" + "colors.png"
+        self.AnalyzeImg = self.AnalyzeImg.scaled(
+            300,250)
+        self.parent.analyze.labelAnalyze.setPixmap(self.AnalyzeImg)
+        bar = pyqtbar(coloranalysis)
 
     def object_detect(self):
-        imgpath = os.path.basename(self.filename)[0:-4]
-        if imgpath:
-            if not os.path.exists("img/" + imgpath + '/frame'):  # 判断所在目录下是否有该文件名的文件夹
-                os.makedirs("img/" + imgpath + '/frame') #目录为空给警告
-            if len(os.listdir("img/" + imgpath + '/frame')) == 0:
-                self.messageBox.warning(self.parent, 'warning', 'Storyboarding first')
-        objectdetection=ObjectDetection(r"./img/" + imgpath)
-        objectdetection.object_detection()
+        if os.path.exists("./img/"+os.path.basename(self.filename)[0:-4]+"/frame"):
+            imgpath = os.path.basename(self.filename)[0:-4]
+            objectdetection = ObjectDetection(r"./img/" + imgpath)
+        else:
+            self.toggle_buttons(True)
+            return
+
+        objectdetection.finished.connect(lambda: self.toggle_buttons(True))
         self.AnalyzeImg = QPixmap("img/" + imgpath + "/objects.png")
         self.AnalyzeImgPath = "img/" + imgpath + "/objects.png"
         self.AnalyzeImg = self.AnalyzeImg.scaled(
-            250, 160)
-        # print(self.AnalyzeImgPath)
+            300,250)
         self.parent.analyze.labelAnalyze.setPixmap(self.AnalyzeImg)
-        # self.toggle_button.setVisible(False)  # 初始时不显示按钮
+        bar = pyqtbar(objectdetection)
 
     def getsubtitles(self, filename):
-        imgpath = os.path.basename(self.filename)[0:-4]
-        save_path = r"./img/" + imgpath + "/"
-        if not os.path.exists(save_path):  # 判断所在目录下是否有该文件名的文件夹
-            os.mkdir(save_path)
-        subtitleprocesser=SubtitleProcessor()
-        subtitleStr, subtitleList = subtitleprocesser.getsubtitleEasyOcr(self.filename, save_path, self.subtitleValue)
-        # print("显示字幕结果", subtitleStr)
-        subtitleprocesser.subtitle2Srt(subtitleList, save_path)
-        self.parent.subtitle.textSubtitle.setPlainText(subtitleStr)
+        if os.path.exists("./img/"+os.path.basename(self.filename)[0:-4]+"/frame"):
+            imgpath = os.path.basename(self.filename)[0:-4]
+            save_path = r"./img/" + imgpath + "/"
+            subtitleprocesser = SubtitleProcessor(self.filename, save_path, self.subtitleValue, self.parent)
+        else:
+            self.toggle_buttons(True)
+            return
 
-        self.v_path = self.filename  # 视频路径
+        subtitleprocesser.subtitlesignal.connect(self.parent.subtitle.textSubtitle.setPlainText)
+        subtitleprocesser.finished.connect(lambda: self.toggle_buttons(True))
+
+        self.video_path = self.filename  # 视频路径
         self.parent.shot_finished.emit()
 
         self.AnalyzeImg = QPixmap("img/" + imgpath + "/" + "subtitle.png")
         self.AnalyzeImgPath = "img/" + imgpath + "/" + "subtitle.png"
         self.AnalyzeImg = self.AnalyzeImg.scaled(
-            250, 160)
+            300, 250)
         self.parent.analyze.labelAnalyze.setPixmap(self.AnalyzeImg)
-
-        # self.toggle_button.setVisible(False)  # 初始时不显示按钮
+        bar = pyqtbar(subtitleprocesser)
 
     def getshotscale(self):
-        image_save = "./img/" + str(os.path.basename(self.filename)[0:-4]) + "/"
-        self.frame_save = "./img/" + str(os.path.basename(self.filename)[0:-4]) + "/frame/"  # 图片存储路径
-        print(image_save)
-        print(self.frame_save)
-        ss = shotscale(25)
-        if not os.path.exists(self.frame_save):  # 判断所在目录下是否有该文件名的文件夹
-            os.makedirs(self.frame_save) #目录为空给警告
-        if not os.path.getsize(self.frame_save):
-            self.messageBox.warning(self.parent, 'warning', 'Storyboarding first')
-        csv_file = image_save + "shotscale.csv"
-        if not os.path.exists(csv_file):
-            image_files = [f for f in os.listdir(self.frame_save) if f.endswith((".jpg", ".jpeg", ".png"))]
-            print(self.frame_save)
-            result = []
-            for img in image_files:
-                print(img)
-                imgDetect, type, num = ss.predict(self.frame_save + img)
-                # cv2.imshow("frame", imgDetect)
-                # cv2.waitKey(0)
-                # cv2.destroyAllWindows()
-                print("Detected People:", num)
-                frame_id = img.replace("frame", "").replace(".jpg", "").replace(".jpeg", "").replace(".png", "")
-                result.append([frame_id, type, num])
-            ss.shotscale_csv(result, image_save)
+        if os.path.exists("./img/"+os.path.basename(self.filename)[0:-4]+"/frame"):
+            image_save = "./img/" + str(os.path.basename(self.filename)[0:-4]) + "/"
+            self.frame_save = "./img/" + str(os.path.basename(self.filename)[0:-4]) + "/frame/"  # 图片存储路径
+            csv_file = image_save + "shotscale.csv"
 
-        png_file = image_save + "shotscale.png"
-        if os.path.exists(png_file):
-            self.AnalyzeImgPath = png_file
+            ss = ShotScale(25, image_save, self.frame_save)
         else:
-            ss.shotscale_plot(result, image_save)
-            self.AnalyzeImgPath = image_save + "shotscale.png"
-        self.AnalyzeImg = QPixmap(self.AnalyzeImgPath)
-        self.AnalyzeImg = self.AnalyzeImg.scaled(250, 160)
-        self.parent.analyze.labelAnalyze.setPixmap(self.AnalyzeImg)
+            self.toggle_buttons(True)
+            return
 
+        ss.finished.connect(lambda: self.toggle_buttons(True))
+        #万一视频名字不变内容变了呢？
+        #if not os.path.exists(csv_file):
+        png_file = image_save + "shotscale.png"
+        self.AnalyzeImgPath = png_file
+        self.AnalyzeImg = QPixmap(self.AnalyzeImgPath)
+        self.AnalyzeImg = self.AnalyzeImg.scaled(300,250)
+        self.parent.analyze.labelAnalyze.setPixmap(self.AnalyzeImg)
+        bar = pyqtbar(ss)
         # self.toggle_button.setVisible(False)  # 初始时不显示按钮
 
     def show_save_dialog(self, file_name):
@@ -242,25 +231,6 @@ class Control(QDockWidget):
 
         if directory:
             self.download_resources(directory, file_name)
-
-    # def thSliderChange(self):
-    #     print("current slider value:"+str(self.thSlider.value()))
-    #     self.th= self.thSlider.value()/100
-    #     self.labelThSlider.setText(str(self.th))
-
-    def show_save_dialog(self, file_name):
-        options = QFileDialog.Options()
-        options |= QFileDialog.DontUseNativeDialog
-        directory = QFileDialog.getExistingDirectory(
-            self, "Select Directory", "", options=options
-        )
-
-        if directory:
-            self.download_resources(directory, file_name)
-    # def thSliderChange(self):
-    #     print("current slider value:"+str(self.thSlider.value()))
-    #     self.th= self.thSlider.value()/100
-    #     self.labelThSlider.setText(str(self.th))
 
     def colorChange(self):
         print("current Color Category slider value:"+str(self.colorsSlider.value()))
@@ -274,7 +244,6 @@ class Control(QDockWidget):
         # 在这里编写复制资源的代码
         # 你需要将指定的资源文件复制到用户选择的 save_path
         # 例如：
-        import shutil
         imgpath = os.path.basename(self.filename)[0:-4]
         resource_path ='./img/'+imgpath+"/"+file_name
         destination_path = os.path.join(directory, file_name)

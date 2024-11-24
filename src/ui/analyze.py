@@ -15,7 +15,7 @@ class Analyze(QDockWidget):
 
     def init_analyze(self):
         self.labelAnalyze = QLabel("", self)
-        self.labelAnalyze.setGeometry(60, 20, 300,250)
+        self.labelAnalyze.setGeometry(30, 30, 300,250)
         self.labelAnalyze.mousePressEvent = self.on_analyze_image_click
     def on_filename_changed(self,filename):
         self.labelAnalyze.setPixmap(QPixmap())
@@ -25,6 +25,10 @@ class Analyze(QDockWidget):
             # 获取原始图片
             pixmap = QPixmap(self.parent.control.AnalyzeImgPath)
             if pixmap is not None:
+                #用户点击刷新
+                AnalyzeImg = QPixmap(self.parent.control.AnalyzeImgPath)
+                AnalyzeImg = AnalyzeImg.scaled(300, 250)
+                self.labelAnalyze.setPixmap(QPixmap(AnalyzeImg))
                 # 创建一个新的窗口来显示放大后的图片
                 pixmap = pixmap.scaled(pixmap.width(), pixmap.height())
                 # 创建一个新的对话框来显示放大后的图片

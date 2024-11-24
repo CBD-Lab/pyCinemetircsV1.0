@@ -1,9 +1,8 @@
 import os
-import cv2
 import csv
 import matplotlib.pyplot as plt
 
-class resultsave:
+class Resultsave:
     def __init__(self, image_save_path):
         self.image_save_path = image_save_path
 
@@ -81,7 +80,9 @@ class resultsave:
             z.append(c[2])
             dot_color.append([c[0] / 255, c[1] / 255, c[2] / 255, 1])
 
+        # fig, ax = plt.subplots(subplot_kw={"projection": None})
         fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+
         ax.scatter(x, y, z, c=dot_color, facecolor='black', edgecolor='black')
         fig.canvas.manager.set_window_title('imgcolors')
         plt.title("color analysis")
