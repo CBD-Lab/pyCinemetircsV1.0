@@ -11,6 +11,7 @@ from algorithms.objectDetection import ObjectDetection
 from algorithms.shotscale import ShotScale
 from algorithms.shotcutTransNetV2 import transNetV2_run
 from algorithms.subtitleEasyOcr import SubtitleProcessor
+from algorithms.CrewEasyOcr import CrewProcessor
 from algorithms.img2Colors import ColorAnalysis
 from ui.progressbar import pyqtbar
 
@@ -24,7 +25,7 @@ class Control(QDockWidget):
         self.parent.filename_changed.connect(self.on_filename_changed)
         # self.video_info_loaded.connect(self.update_table)
         self.colorsC = 5 #要分析的颜色类别的数量
-        self.subtitleValue = 48
+        self.subtitleValue = 10
         self.init_ui()
 
     def init_ui(self):
@@ -79,7 +80,7 @@ class Control(QDockWidget):
 
         self.download_subtitle_button = QPushButton(".csv", self)
         self.download_subtitle_button.clicked.connect(
-            functools.partial(self.show_save_dialog, "subtitle.csv")
+            functools.partial(self.show_save_dialog, "Crew.csv")
         )
 
         self.download_shotscale_button = QPushButton(".csv", self)
@@ -182,19 +183,19 @@ class Control(QDockWidget):
         if os.path.exists("./img/"+os.path.basename(self.filename)[0:-4]+"/frame"):
             imgpath = os.path.basename(self.filename)[0:-4]
             save_path = r"./img/" + imgpath + "/"
-            subtitleprocesser = SubtitleProcessor(self.filename, save_path, self.subtitleValue, self.parent)
+            subtitleprocesser = CrewProcessor(self.filename, save_path, self.subtitleValue, self.parent)
         else:
             self.toggle_buttons(True)
             return
 
-        subtitleprocesser.subtitlesignal.connect(self.parent.subtitle.textSubtitle.setPlainText)
+        subtitleprocesser.Crewsignal.connect(self.parent.subtitle.textSubtitle.setPlainText)
         subtitleprocesser.finished.connect(lambda: self.toggle_buttons(True))
 
         self.video_path = self.filename  # 视频路径
         self.parent.shot_finished.emit()
 
-        self.AnalyzeImg = QPixmap("img/" + imgpath + "/" + "subtitle.png")
-        self.AnalyzeImgPath = "img/" + imgpath + "/" + "subtitle.png"
+        self.AnalyzeImg = QPixmap("img/" + imgpath + "/" + "Crew.png")
+        self.AnalyzeImgPath = "img/" + imgpath + "/" + "Crew.png"
         self.AnalyzeImg = self.AnalyzeImg.scaled(
             300, 250)
         self.parent.analyze.labelAnalyze.setPixmap(self.AnalyzeImg)
