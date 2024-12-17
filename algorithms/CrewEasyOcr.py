@@ -22,7 +22,7 @@ class CrewProcessor(QThread):
         self.reader = easyocr.Reader(['ch_sim', 'en'])
         self.v_path = v_path
         self.save_path = save_path
-        self.CrewValue = CrewValue
+        self.CrewValue = 10
         self.parent = parent
 
     def run(self):
