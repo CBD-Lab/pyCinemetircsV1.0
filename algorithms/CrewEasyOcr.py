@@ -19,7 +19,7 @@ class CrewProcessor(QThread):
 
     def __init__(self, v_path, save_path, CrewValue, parent):
         super(CrewProcessor, self).__init__()
-        self.reader = easyocr.Reader(['ch_sim', 'en','de','es','fr','ja','ko'])
+        self.reader = easyocr.Reader(['ch_sim', 'en'])
         self.v_path = v_path
         self.save_path = save_path
         self.CrewValue = 10
